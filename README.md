@@ -47,7 +47,7 @@ Chainbase uses Tradier to create a database of option chains for future analysis
     Run the script with the required arguments:
 
     ```bash
-    python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key
+    python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key
     ```
 
     - `--db_name`: Name of the PostgreSQL database.
@@ -55,15 +55,15 @@ Chainbase uses Tradier to create a database of option chains for future analysis
     - `--password`: Database user's password.
     - `--host`: Database host (default: `localhost`).
     - `--port`: Database port (default: `5432`).
-    - `--tickers`: Comma-separated list of stock tickers and ETFs (e.g., `SPY.ETF`).
+    - `--tickers`: Comma-separated list of stock tickers and ETFs (e.g., `SPY.ETF`). To track both an ETF and its constituents, include both the ETF symbol and the ETF symbol with `.ETF` (e.g., `SPY,SPY.ETF`).
     - `--interval`: Interval in seconds to fetch data (default: `3600` seconds, or 1 hour).
     - `--tradier_api_key`: Tradier API key.
     - `--fmp_api_key`: Financial Modeling Prep API key.
 
 ## Example
 
-To set up the database and start fetching options chains for Apple, Microsoft, Google, and the tickers within the SPY ETF every hour:
+To set up the database and start fetching options chains for Apple, Microsoft, Google, SPY, and the tickers within the SPY ETF every hour:
 
 ```bash
-python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key
+python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key
 ```
