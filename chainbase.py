@@ -1,14 +1,21 @@
 import argparse
 import datetime
 import psycopg2
-from psycopg2.extras import execute_values
 import requests
 import logging
+import pickle
 from threading import Timer
 from ratelimit import limits, sleep_and_retry
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("chainbase.log"),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 TRADIER_API_URL = "https://api.tradier.com/v1"
@@ -61,23 +68,17 @@ def get_etf_holdings(symbol, api_key):
     return [holding['symbol'] for holding in data]
 
 # Function to set up the PostgreSQL database
-def setup_database(db_name, user, password, host, port):
+def setup_database(db_name, user, password, host, port, drop_table):
     conn = psycopg2.connect(dbname=db_name, user=user, password=password, host=host, port=port)
     cur = conn.cursor()
+    if drop_table:
+        cur.execute("DROP TABLE IF EXISTS options_chains;")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS options_chains (
             id SERIAL PRIMARY KEY,
             symbol VARCHAR(10),
             expiration DATE,
-            option_type VARCHAR(4),
-            strike FLOAT,
-            last_trade_date TIMESTAMP,
-            bid FLOAT,
-            ask FLOAT,
-            last_price FLOAT,
-            implied_volatility FLOAT,
-            volume INT,
-            open_interest INT,
+            options BYTEA,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
@@ -90,22 +91,25 @@ def setup_database(db_name, user, password, host, port):
 def fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key):
     conn = psycopg2.connect(dbname=db_name, user=user, password=password, host=host, port=port)
     cur = conn.cursor()
-    
+
     processed_tickers = set()
-    
+
     for ticker in tickers:
         if ticker.endswith('.ETF'):
+            logger.info(f"Processing ETF: {ticker}")
             etf_symbol = ticker.split('.')[0]
             etf_tickers = get_etf_holdings(etf_symbol, fmp_api_key)
             for etf_ticker in etf_tickers:
+                logger.info(f"Processing ETF holding: {etf_ticker}")
                 if etf_ticker not in processed_tickers:
                     processed_tickers.add(etf_ticker)
                     process_ticker(etf_ticker, cur, tradier_api_key)
         else:
             if ticker not in processed_tickers:
+                logger.info(f"Processing ticker: {ticker}")
                 processed_tickers.add(ticker)
                 process_ticker(ticker, cur, tradier_api_key)
-    
+
     conn.commit()
     cur.close()
     conn.close()
@@ -119,18 +123,19 @@ def process_ticker(ticker, cur, api_key):
         if 1 <= dte <= 90:
             puts, calls = get_option_chain(ticker, exp, api_key)
 
-            data = []
+            options_data = {
+                'puts': puts,
+                'calls': calls
+            }
 
-            for opt in puts:
-                data.append((ticker, exp, 'put', opt['strike'], opt['last_trade_date'], opt['bid'], opt['ask'], opt['last'], opt['implied_volatility'], opt['volume'], opt['open_interest']))
+            logger.info(f"Found {len(puts)} puts and {len(calls)} calls for {ticker} on {exp_date}")
+            # Serialize the options data
+            pickled_data = pickle.dumps(options_data)
 
-            for opt in calls:
-                data.append((ticker, exp, 'call', opt['strike'], opt['last_trade_date'], opt['bid'], opt['ask'], opt['last'], opt['implied_volatility'], opt['volume'], opt['open_interest']))
-
-            execute_values(cur, """
-                INSERT INTO options_chains (symbol, expiration, option_type, strike, last_trade_date, bid, ask, last_price, implied_volatility, volume, open_interest)
-                VALUES %s
-            """, data)
+            cur.execute("""
+                INSERT INTO options_chains (symbol, expiration, options)
+                VALUES (%s, %s, %s)
+            """, (ticker, exp_date, pickled_data))
 
 # Function to fetch options data periodically
 def schedule_fetch(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, interval):
@@ -148,9 +153,10 @@ if __name__ == '__main__':
     parser.add_argument('--interval', type=int, default=3600, help="Interval in seconds to fetch data")
     parser.add_argument('--tradier_api_key', type=str, required=True, help="Tradier API key")
     parser.add_argument('--fmp_api_key', type=str, required=True, help="FMP API key")
+    parser.add_argument('--drop_table', action='store_true', help="Drop the table if it exists")
 
     args = parser.parse_args()
     
     tickers = args.tickers.split(',')
-    setup_database(args.db_name, args.user, args.password, args.host, args.port)
+    setup_database(args.db_name, args.user, args.password, args.host, args.port, args.drop_table)
     schedule_fetch(tickers, args.db_name, args.user, args.password, args.host, args.port, args.tradier_api_key, args.fmp_api_key, args.interval)
