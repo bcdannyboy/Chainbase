@@ -52,8 +52,9 @@ def get_option_chain(symbol, expiration, api_token):
 
 @sleep_and_retry
 @limits(calls=RATE_LIMIT, period=60)
-def get_etf_holdings(symbol, date, api_key):
-    url = f"{FMP_API_URL}?symbol={symbol}&date={date}"
+def get_etf_holdings(symbol, api_key):
+    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    url = f"{FMP_API_URL}?symbol={symbol}&date={current_date}"
     response = requests.get(url, params={'apikey': api_key})
     response.raise_for_status()
     data = response.json()
@@ -86,7 +87,7 @@ def setup_database(db_name, user, password, host, port):
     logger.info("Database setup complete.")
 
 # Function to fetch and store options data
-def fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, date):
+def fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key):
     conn = psycopg2.connect(dbname=db_name, user=user, password=password, host=host, port=port)
     cur = conn.cursor()
     
@@ -95,7 +96,7 @@ def fetch_and_store_options(tickers, db_name, user, password, host, port, tradie
     for ticker in tickers:
         if ticker.endswith('.ETF'):
             etf_symbol = ticker.split('.')[0]
-            etf_tickers = get_etf_holdings(etf_symbol, date, fmp_api_key)
+            etf_tickers = get_etf_holdings(etf_symbol, fmp_api_key)
             for etf_ticker in etf_tickers:
                 if etf_ticker not in processed_tickers:
                     processed_tickers.add(etf_ticker)
@@ -132,9 +133,9 @@ def process_ticker(ticker, cur, api_key):
             """, data)
 
 # Function to fetch options data periodically
-def schedule_fetch(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, date, interval):
-    fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, date)
-    Timer(interval, schedule_fetch, args=[tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, date, interval]).start()
+def schedule_fetch(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, interval):
+    fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key)
+    Timer(interval, schedule_fetch, args=[tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, interval]).start()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Set up PostgreSQL server and gather options chains")
@@ -147,10 +148,9 @@ if __name__ == '__main__':
     parser.add_argument('--interval', type=int, default=3600, help="Interval in seconds to fetch data")
     parser.add_argument('--tradier_api_key', type=str, required=True, help="Tradier API key")
     parser.add_argument('--fmp_api_key', type=str, required=True, help="FMP API key")
-    parser.add_argument('--date', type=str, default='2023-09-30', help="Date for ETF holdings")
 
     args = parser.parse_args()
     
     tickers = args.tickers.split(',')
     setup_database(args.db_name, args.user, args.password, args.host, args.port)
-    schedule_fetch(tickers, args.db_name, args.user, args.password, args.host, args.port, args.tradier_api_key, args.fmp_api_key, args.date, args.interval)
+    schedule_fetch(tickers, args.db_name, args.user, args.password, args.host, args.port, args.tradier_api_key, args.fmp_api_key, args.interval)
