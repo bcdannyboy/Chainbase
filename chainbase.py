@@ -6,6 +6,7 @@ import logging
 import pickle
 from threading import Timer
 from ratelimit import limits, sleep_and_retry
+import pytz
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 TRADIER_API_URL = "https://api.tradier.com/v1"
 FMP_API_URL = "https://financialmodelingprep.com/api/v4/etf-holdings"
 RATE_LIMIT = 60  # Number of requests per minute
+TRADING_START_HOUR = 9  # Trading starts at 9 AM PST
+TRADING_END_HOUR = 16  # Trading ends at 4 PM PST
+PST = pytz.timezone('America/Los_Angeles')  # PST timezone
 
 @sleep_and_retry
 @limits(calls=RATE_LIMIT, period=60)
@@ -59,13 +63,43 @@ def get_option_chain(symbol, expiration, api_token):
 
 @sleep_and_retry
 @limits(calls=RATE_LIMIT, period=60)
-def get_etf_holdings(symbol, api_key):
-    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
-    url = f"{FMP_API_URL}?symbol={symbol}&date={current_date}"
+def get_latest_etf_holding_date(symbol, api_key):
+    url = f"https://financialmodelingprep.com/api/v4/etf-holdings/portfolio-date"
+    params = {'symbol': symbol, 'apikey': api_key}
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+    data = response.json()
+    
+    if data:
+        latest_date = data[0]['date']
+        logger.info(f"Latest holding date for {symbol}: {latest_date}")
+        return latest_date
+    else:
+        logger.warning(f"No holding dates found for ETF: {symbol}")
+        return None
+
+@sleep_and_retry
+@limits(calls=RATE_LIMIT, period=60)
+def get_etf_holdings(symbol, date, api_key):
+    url = f"{FMP_API_URL}?symbol={symbol}&date={date}"
     response = requests.get(url, params={'apikey': api_key})
     response.raise_for_status()
     data = response.json()
-    return [holding['symbol'] for holding in data]
+    
+    # Log the API response
+    logger.info(f"ETF holdings response for {symbol} on {date}: {data}")
+    
+    if isinstance(data, list):
+        holdings = []
+        for holding in data:
+            if 'symbol' in holding:
+                holdings.append(holding['symbol'])
+            else:
+                logger.warning(f"Missing 'symbol' in holding: {holding}")
+        return holdings
+    else:
+        logger.warning(f"No valid holdings data found for ETF: {symbol}")
+        return []
 
 # Function to set up the PostgreSQL database
 def setup_database(db_name, user, password, host, port, drop_table):
@@ -73,6 +107,7 @@ def setup_database(db_name, user, password, host, port, drop_table):
     cur = conn.cursor()
     if drop_table:
         cur.execute("DROP TABLE IF EXISTS options_chains;")
+        logger.info("Dropping existing options_chains table.")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS options_chains (
             id SERIAL PRIMARY KEY,
@@ -98,12 +133,18 @@ def fetch_and_store_options(tickers, db_name, user, password, host, port, tradie
         if ticker.endswith('.ETF'):
             logger.info(f"Processing ETF: {ticker}")
             etf_symbol = ticker.split('.')[0]
-            etf_tickers = get_etf_holdings(etf_symbol, fmp_api_key)
-            for etf_ticker in etf_tickers:
-                logger.info(f"Processing ETF holding: {etf_ticker}")
-                if etf_ticker not in processed_tickers:
-                    processed_tickers.add(etf_ticker)
-                    process_ticker(etf_ticker, cur, tradier_api_key)
+            latest_date = get_latest_etf_holding_date(etf_symbol, fmp_api_key)
+            if latest_date:
+                etf_holdings = get_etf_holdings(etf_symbol, latest_date, fmp_api_key)
+                logger.info(f"Found {len(etf_holdings)} holdings for ETF: {etf_symbol}")
+                for holding in etf_holdings:
+                    if holding:
+                        logger.info(f"Processing ETF holding: {holding}")
+                        if holding not in processed_tickers:
+                            processed_tickers.add(holding)
+                            process_ticker(holding, cur, tradier_api_key)
+                    else:
+                        logger.warning(f"Skipping invalid holding: {holding}")
         else:
             if ticker not in processed_tickers:
                 logger.info(f"Processing ticker: {ticker}")
@@ -116,10 +157,15 @@ def fetch_and_store_options(tickers, db_name, user, password, host, port, tradie
     logger.info("Options data fetched and stored.")
 
 def process_ticker(ticker, cur, api_key):
-    expirations = get_option_expirations(ticker, api_key)
+    try:
+        expirations = get_option_expirations(ticker, api_key)
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"Error fetching expirations for {ticker}: {e}")
+        return
+    
     for exp in expirations:
-        exp_date = datetime.datetime.strptime(exp, '%Y-%m-%d')
-        dte = (exp_date - datetime.datetime.now()).days
+        exp_date = PST.localize(datetime.datetime.strptime(exp, '%Y-%m-%d'))
+        dte = (exp_date - datetime.datetime.now(PST)).days
         if 1 <= dte <= 90:
             puts, calls = get_option_chain(ticker, exp, api_key)
 
@@ -137,9 +183,18 @@ def process_ticker(ticker, cur, api_key):
                 VALUES (%s, %s, %s)
             """, (ticker, exp_date, pickled_data))
 
+# Function to check if it's within regular trading hours
+def is_trading_hours():
+    now = datetime.datetime.now(PST)
+    return TRADING_START_HOUR <= now.hour < TRADING_END_HOUR
+
 # Function to fetch options data periodically
 def schedule_fetch(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, interval):
-    fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key)
+    fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key)  # Always do initial fetch
+    if is_trading_hours():
+        fetch_and_store_options(tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key)
+    else:
+        logger.info("Outside of trading hours. Skipping fetch.")
     Timer(interval, schedule_fetch, args=[tickers, db_name, user, password, host, port, tradier_api_key, fmp_api_key, interval]).start()
 
 if __name__ == '__main__':
@@ -159,4 +214,5 @@ if __name__ == '__main__':
     
     tickers = args.tickers.split(',')
     setup_database(args.db_name, args.user, args.password, args.host, args.port, args.drop_table)
+    fetch_and_store_options(tickers, args.db_name, args.user, args.password, args.host, args.port, args.tradier_api_key, args.fmp_api_key)  # Initial fetch
     schedule_fetch(tickers, args.db_name, args.user, args.password, args.host, args.port, args.tradier_api_key, args.fmp_api_key, args.interval)
