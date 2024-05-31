@@ -16,8 +16,6 @@ Chainbase uses Tradier to create a database of option chains for future analysis
 - Python 3.x
 - PostgreSQL
 - Required Python packages: `psycopg2`, `requests`, `argparse`, `ratelimit`
-- [Tradier](https://tradier.com/) API key for Options Chains
-- [Financial Modeling Prep](https://site.financialmodelingprep.com/) API Key for Commodities
 
 ## Installation
 
@@ -49,7 +47,7 @@ Chainbase uses Tradier to create a database of option chains for future analysis
     Run the script with the required arguments:
 
     ```bash
-    python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key --date 2023-09-30
+    python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key
     ```
 
     - `--db_name`: Name of the PostgreSQL database.
@@ -61,12 +59,11 @@ Chainbase uses Tradier to create a database of option chains for future analysis
     - `--interval`: Interval in seconds to fetch data (default: `3600` seconds, or 1 hour).
     - `--tradier_api_key`: Tradier API key.
     - `--fmp_api_key`: Financial Modeling Prep API key.
-    - `--date`: Date for ETF holdings (default: `2023-09-30`).
 
 ## Example
 
 To set up the database and start fetching options chains for Apple, Microsoft, Google, and the tickers within the SPY ETF every hour:
 
 ```bash
-python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key --date 2023-09-30
+python chainbase.py --db_name chainbase --user your_db_user --password your_db_password --host localhost --port 5432 --tickers AAPL,MSFT,GOOG,SPY.ETF --interval 3600 --tradier_api_key your_tradier_api_key --fmp_api_key your_fmp_api_key
 ```
